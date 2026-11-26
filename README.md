@@ -43,7 +43,7 @@
 ### Pasos
 ```bash
 # 1. Clonar el repositorio
-git clone https://github.com/leopl/GuideCobbleEs.git
+git clone https://github.com/LJprogram657/GuideCobbleEs.git
 cd GuideCobbleEs
 
 # 2. Instalar dependencias
