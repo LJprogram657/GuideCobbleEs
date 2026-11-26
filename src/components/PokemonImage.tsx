@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { Pokemon } from '../data/pokemonData';
-import { getCobblemon3DRender } from '../utils/modelRenderer';
 
 interface PokemonImageProps {
   pokemon: Pokemon;
@@ -10,58 +9,44 @@ interface PokemonImageProps {
 
 export const PokemonImage: React.FC<PokemonImageProps> = ({ pokemon, className, alt }) => {
   const cleanSlug = pokemon.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const home3dUrl = `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/home/${pokemon.id}.png`;
   const artworkUrl = pokemon.artwork_fallback || `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${pokemon.id}.png`;
-  const pixelUrl = `https://play.pokemonshowdown.com/sprites/gen5/${cleanSlug}.png`;
+  const showdownAniUrl = `https://play.pokemonshowdown.com/sprites/ani/${cleanSlug}.gif`;
 
-  const [src, setSrc] = useState(pokemon.sprite);
+  // Determinar la mejor fuente inicial:
+  // Si tiene modelo de Cobblemon oficial, intentamos su sprite de Cobblemon; si no, usamos directamente el modelo 3D oficial de Pokémon HOME.
+  const initialSrc = pokemon.has_cobblemon_model && pokemon.sprite && !pokemon.sprite.includes('official-artwork')
+    ? pokemon.sprite
+    : home3dUrl;
+
+  const [src, setSrc] = useState(initialSrc);
+  const [triedHome, setTriedHome] = useState(false);
 
   useEffect(() => {
-    let isCancelled = false;
-
-    // Si el Pokémon no tenía sprite.png en el servidor de Cobblemon,
-    // renderizamos automáticamente su modelo 3D oficial de Blockbench en tiempo real
-    if (!pokemon.has_cobblemon_model) {
-      getCobblemon3DRender(pokemon.name).then((dataUrl) => {
-        if (!isCancelled && dataUrl) {
-          setSrc(dataUrl);
-        }
-      });
-    } else {
-      setSrc(pokemon.sprite);
-    }
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [pokemon.id, pokemon.name, pokemon.sprite, pokemon.has_cobblemon_model]);
+    const nextSrc = pokemon.has_cobblemon_model && pokemon.sprite && !pokemon.sprite.includes('official-artwork')
+      ? pokemon.sprite
+      : home3dUrl;
+    setSrc(nextSrc);
+    setTriedHome(false);
+  }, [pokemon.id, pokemon.sprite, pokemon.has_cobblemon_model, home3dUrl]);
 
   const handleLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
     const img = e.currentTarget;
-    // Si cobblemon devolvió el "?" de 96x96
+    // Si cobblemon devolvió el sprite "?" de 96x96 píxeles de criatura no implementada
     if (img.naturalWidth <= 96 && img.naturalHeight <= 96 && src.includes('cobblemon.tools')) {
-      getCobblemon3DRender(pokemon.name).then((dataUrl) => {
-        if (dataUrl) {
-          setSrc(dataUrl);
-        } else {
-          setSrc(artworkUrl);
-        }
-      });
+      setSrc(home3dUrl);
+      setTriedHome(true);
     }
   };
 
   const handleError = () => {
-    if (src.includes('cobblemon.tools')) {
-      getCobblemon3DRender(pokemon.name).then((dataUrl) => {
-        if (dataUrl) {
-          setSrc(dataUrl);
-        } else {
-          setSrc(artworkUrl);
-        }
-      });
-    } else if (src !== artworkUrl) {
+    if (src.includes('cobblemon.tools') || !triedHome) {
+      setSrc(home3dUrl);
+      setTriedHome(true);
+    } else if (src === home3dUrl) {
       setSrc(artworkUrl);
-    } else {
-      setSrc(pixelUrl);
+    } else if (src === artworkUrl) {
+      setSrc(showdownAniUrl);
     }
   };
 
