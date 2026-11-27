@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Loader2, RotateCw, Box, AlertCircle } from 'lucide-react';
+import { Loader2, RotateCw, Box, AlertCircle, RefreshCw, WifiOff } from 'lucide-react';
 import { POKEMON_DATA } from '../data/pokemonData';
 
 interface Cobblemon3DViewerProps {
@@ -21,6 +21,8 @@ export const Cobblemon3DViewer: React.FC<Cobblemon3DViewerProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
   const [hasModel, setHasModel] = useState<boolean | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
   const [animations, setAnimations] = useState<string[]>([]);
   const [selectedAnimation, setSelectedAnimation] = useState<string>('');
   const [isRotating, setIsRotating] = useState(autoRotate);
@@ -32,6 +34,8 @@ export const Cobblemon3DViewer: React.FC<Cobblemon3DViewerProps> = ({
 
   const cleanName = pokemonName.toLowerCase().replace(/[^a-z0-9]/g, '');
   const pokeData = POKEMON_DATA.find(p => p.name.toLowerCase() === pokemonName.toLowerCase() || p.name_es.toLowerCase() === pokemonName.toLowerCase());
+  const isOfficiallyInCobblemon = pokeData?.has_cobblemon_model ?? true;
+
   const showdownAniUrl = `https://play.pokemonshowdown.com/sprites/ani/${cleanName}.gif`;
   const home3dUrl = `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/home/${pokeData?.id || 1}.png`;
 
@@ -41,10 +45,11 @@ export const Cobblemon3DViewer: React.FC<Cobblemon3DViewerProps> = ({
 
     setLoading(true);
     setHasModel(null);
+    setLoadError(null);
     setAnimations([]);
     actionsRef.current = {};
 
-    // 1. Escena, Cámara y Renderizador Three.js
+    // 1. Configuración de Escena Three.js
     const scene = new THREE.Scene();
     const width = container.clientWidth || 300;
     const heightPx = container.clientHeight || 340;
@@ -61,7 +66,7 @@ export const Cobblemon3DViewer: React.FC<Cobblemon3DViewerProps> = ({
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
 
-    // 2. Iluminación de Estudio estilo Minecraft
+    // 2. Luces
     const ambientLight = new THREE.AmbientLight(0xffffff, 1.5);
     scene.add(ambientLight);
 
@@ -73,7 +78,7 @@ export const Cobblemon3DViewer: React.FC<Cobblemon3DViewerProps> = ({
     fillLight.position.set(-3, 2, -3);
     scene.add(fillLight);
 
-    // 3. OrbitControls (Arrastrar 360°, Zoom, etc.)
+    // 3. OrbitControls
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
@@ -87,98 +92,121 @@ export const Cobblemon3DViewer: React.FC<Cobblemon3DViewerProps> = ({
     let isDisposed = false;
     const clock = new THREE.Clock();
 
-    // 4. Cargar modelo GLTF Oficial de Blockbench de Cobblemon
+    // 4. Intentar cargar el modelo GLTF con respaldo inteligente
     const loader = new GLTFLoader();
-    const modelUrl = `/cobblemon-proxy/pokedex/pokemon/${cleanName}/models/${cleanName}.gltf`;
 
-    loader.load(
-      modelUrl,
-      (gltf) => {
+    // URLs en cascada: primero el proxy local, luego la URL directa
+    const modelUrls = [
+      `/cobblemon-proxy/pokedex/pokemon/${cleanName}/models/${cleanName}.gltf`,
+      `https://cobblemon.tools/pokedex/pokemon/${cleanName}/models/${cleanName}.gltf`
+    ];
+
+    const tryLoadModel = (urlIndex: number) => {
+      if (urlIndex >= modelUrls.length) {
         if (isDisposed) return;
+        setLoading(false);
+        if (isOfficiallyInCobblemon) {
+          // El Pokémon sí tiene modelo oficial, pero la conexión falló
+          setLoadError('No se pudo establecer conexión con el servidor 3D de Cobblemon. Puede deberse a un reinicio de red temporal.');
+          setHasModel(null);
+        } else {
+          // El Pokémon realmente no tiene modelo implementado en Cobblemon
+          setHasModel(false);
+        }
+        return;
+      }
 
-        const model = gltf.scene;
+      const currentUrl = modelUrls[urlIndex];
 
-        // Centrar y apoyar en el suelo
-        const box = new THREE.Box3().setFromObject(model);
-        const size = box.getSize(new THREE.Vector3());
-        const center = box.getCenter(new THREE.Vector3());
+      loader.load(
+        currentUrl,
+        (gltf) => {
+          if (isDisposed) return;
 
-        model.position.x -= center.x;
-        model.position.y -= box.min.y;
-        model.position.z -= center.z;
+          const model = gltf.scene;
 
-        // Distancia y target de la cámara según dimensiones del mob
-        const maxDim = Math.max(size.x, size.y, size.z);
-        const targetDistance = Math.max(maxDim * 2.2, 2.0);
-        camera.position.set(0, size.y * 0.7, targetDistance);
-        controls.target.set(0, size.y * 0.45, 0);
-        controls.update();
+          // Centrar modelo
+          const box = new THREE.Box3().setFromObject(model);
+          const size = box.getSize(new THREE.Vector3());
+          const center = box.getCenter(new THREE.Vector3());
 
-        // Orientación de frente con ligero ángulo 3/4
-        model.rotation.y = Math.PI - 0.35;
+          model.position.x -= center.x;
+          model.position.y -= box.min.y;
+          model.position.z -= center.z;
 
-        // Texturas nítidas pixel art estilo Minecraft
-        model.traverse((child) => {
-          if ((child as THREE.Mesh).isMesh) {
-            const mesh = child as THREE.Mesh;
-            mesh.castShadow = true;
-            mesh.receiveShadow = true;
-            if (mesh.material) {
-              const mat = mesh.material as THREE.MeshStandardMaterial;
-              if (mat.map) {
-                mat.map.magFilter = THREE.NearestFilter;
-                mat.map.minFilter = THREE.NearestMipmapNearestFilter;
-                mat.map.needsUpdate = true;
+          // Ajustar distancia y enfoque de la cámara
+          const maxDim = Math.max(size.x, size.y, size.z);
+          const targetDistance = Math.max(maxDim * 2.2, 2.0);
+          camera.position.set(0, size.y * 0.7, targetDistance);
+          controls.target.set(0, size.y * 0.45, 0);
+          controls.update();
+
+          // Orientar de frente
+          model.rotation.y = Math.PI - 0.35;
+
+          // Filtrado pixel-art de texturas
+          model.traverse((child) => {
+            if ((child as THREE.Mesh).isMesh) {
+              const mesh = child as THREE.Mesh;
+              mesh.castShadow = true;
+              mesh.receiveShadow = true;
+              if (mesh.material) {
+                const mat = mesh.material as THREE.MeshStandardMaterial;
+                if (mat.map) {
+                  mat.map.magFilter = THREE.NearestFilter;
+                  mat.map.minFilter = THREE.NearestMipmapNearestFilter;
+                  mat.map.needsUpdate = true;
+                }
               }
             }
-          }
-        });
-
-        scene.add(model);
-
-        // 5. Animaciones oficiales de Blockbench
-        if (gltf.animations && gltf.animations.length > 0) {
-          const mixer = new THREE.AnimationMixer(model);
-          mixerRef.current = mixer;
-
-          const clipNames: string[] = [];
-          const actions: Record<string, THREE.AnimationAction> = {};
-
-          gltf.animations.forEach((clip) => {
-            const cleanClipName = clip.name
-              .replace(/^animation\.[a-z0-9_]+\./i, '')
-              .replace(/_/g, ' ')
-              .replace(/\b\w/g, l => l.toUpperCase());
-
-            clipNames.push(cleanClipName);
-            actions[cleanClipName] = mixer.clipAction(clip);
           });
 
-          setAnimations(clipNames);
-          actionsRef.current = actions;
+          scene.add(model);
 
-          // Seleccionar animación idle o la primera
-          const defaultClip = clipNames.find(n => n.toLowerCase().includes('ground idle') || n.toLowerCase().includes('idle')) || clipNames[0];
-          if (defaultClip && actions[defaultClip]) {
-            actions[defaultClip].play();
-            currentActionRef.current = actions[defaultClip];
-            setSelectedAnimation(defaultClip);
+          // Animaciones de Blockbench
+          if (gltf.animations && gltf.animations.length > 0) {
+            const mixer = new THREE.AnimationMixer(model);
+            mixerRef.current = mixer;
+
+            const clipNames: string[] = [];
+            const actions: Record<string, THREE.AnimationAction> = {};
+
+            gltf.animations.forEach((clip) => {
+              const cleanClipName = clip.name
+                .replace(/^animation\.[a-z0-9_]+\./i, '')
+                .replace(/_/g, ' ')
+                .replace(/\b\w/g, l => l.toUpperCase());
+
+              clipNames.push(cleanClipName);
+              actions[cleanClipName] = mixer.clipAction(clip);
+            });
+
+            setAnimations(clipNames);
+            actionsRef.current = actions;
+
+            const defaultClip = clipNames.find(n => n.toLowerCase().includes('ground idle') || n.toLowerCase().includes('idle')) || clipNames[0];
+            if (defaultClip && actions[defaultClip]) {
+              actions[defaultClip].play();
+              currentActionRef.current = actions[defaultClip];
+              setSelectedAnimation(defaultClip);
+            }
           }
+
+          setHasModel(true);
+          setLoading(false);
+          setLoadError(null);
+        },
+        undefined,
+        () => {
+          // Si falló el primer enlace, intentar con el siguiente en cascada
+          tryLoadModel(urlIndex + 1);
         }
+      );
+    };
 
-        setHasModel(true);
-        setLoading(false);
-      },
-      undefined,
-      () => {
-        if (isDisposed) return;
-        // El Pokémon aún no tiene modelo .gltf en Cobblemon
-        setHasModel(false);
-        setLoading(false);
-      }
-    );
+    tryLoadModel(0);
 
-    // 6. Bucle de renderizado
+    // 5. Bucle de render
     const animate = () => {
       animationFrameId = requestAnimationFrame(animate);
 
@@ -213,7 +241,7 @@ export const Cobblemon3DViewer: React.FC<Cobblemon3DViewerProps> = ({
         container.innerHTML = '';
       }
     };
-  }, [cleanName]);
+  }, [cleanName, retryKey, isOfficiallyInCobblemon]);
 
   const handleAnimationChange = (animName: string) => {
     setSelectedAnimation(animName);
@@ -240,7 +268,7 @@ export const Cobblemon3DViewer: React.FC<Cobblemon3DViewerProps> = ({
       {/* Contenedor del Canvas 3D */}
       <div 
         ref={containerRef} 
-        style={{ height, display: hasModel === false ? 'none' : 'block' }} 
+        style={{ height, display: hasModel === true ? 'block' : 'none' }} 
         className="w-full cursor-grab active:cursor-grabbing"
       />
 
@@ -252,12 +280,12 @@ export const Cobblemon3DViewer: React.FC<Cobblemon3DViewerProps> = ({
             Cargando modelo 3D oficial de Cobblemon...
           </span>
           <span className="text-[10px] text-zinc-500 font-mono mt-1">
-            Geometría Blockbench + Animaciones Minecraft
+            Conectando con el servidor de assets de Minecraft
           </span>
         </div>
       )}
 
-      {/* Si el modelo 3D existe y cargó con éxito */}
+      {/* Modelo 3D cargado con éxito */}
       {!loading && hasModel === true && (
         <>
           {/* Badge Superior */}
@@ -268,7 +296,6 @@ export const Cobblemon3DViewer: React.FC<Cobblemon3DViewerProps> = ({
 
           {/* Barra de Controles Inferiores */}
           <div className="absolute bottom-2.5 left-2.5 right-2.5 z-10 flex flex-wrap items-center justify-between gap-2 pointer-events-auto">
-            {/* Selector de animaciones de Blockbench */}
             {animations.length > 0 && (
               <div className="flex items-center gap-1.5 bg-[#101724]/90 backdrop-blur-xs border border-[#243044] rounded-xl px-2.5 py-1 shadow-md">
                 <span className="text-[10px] text-zinc-400 font-medium">Animación:</span>
@@ -286,7 +313,6 @@ export const Cobblemon3DViewer: React.FC<Cobblemon3DViewerProps> = ({
               </div>
             )}
 
-            {/* Botón de Giro 360° */}
             <button
               onClick={toggleAutoRotate}
               className={`flex items-center gap-1 px-3 py-1 rounded-xl text-[11px] font-semibold transition-all border shadow-md ml-auto ${
@@ -303,8 +329,30 @@ export const Cobblemon3DViewer: React.FC<Cobblemon3DViewerProps> = ({
         </>
       )}
 
-      {/* Si el Pokémon aún no tiene modelo en Cobblemon */}
-      {!loading && hasModel === false && (
+      {/* Si hubo un error de conexión de red */}
+      {!loading && loadError && (
+        <div style={{ minHeight: height }} className="flex flex-col items-center justify-center p-6 text-center space-y-3 bg-[#080c14]">
+          <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400 shadow-inner">
+            <WifiOff className="w-6 h-6" />
+          </div>
+
+          <div className="max-w-md space-y-1">
+            <h4 className="font-bold text-white text-sm">Error de conexión con el modelo 3D</h4>
+            <p className="text-xs text-zinc-400 leading-relaxed">{loadError}</p>
+          </div>
+
+          <button
+            onClick={() => setRetryKey(prev => prev + 1)}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold transition-all shadow-md shadow-sky-950/50 cursor-pointer"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Reintentar carga del modelo 3D</span>
+          </button>
+        </div>
+      )}
+
+      {/* Si la especie realmente NO tiene modelo en Cobblemon todavía */}
+      {!loading && hasModel === false && !loadError && (
         <div style={{ minHeight: height }} className="flex flex-col items-center justify-center p-6 text-center space-y-3 bg-[#080c14]">
           <div className="relative w-36 h-36 flex items-center justify-center bg-[#0d131f] rounded-2xl border border-[#1e2738] shadow-inner p-2">
             <img 

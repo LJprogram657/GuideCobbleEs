@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/cobblemon-proxy/:path*",
+      "destination": "https://cobblemon.tools/:path*"
+    }
+  ]
+}
